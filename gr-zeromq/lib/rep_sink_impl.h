@@ -38,6 +38,8 @@ namespace gr {
       zmq::context_t  *d_context;
       zmq::socket_t   *d_socket;
 
+      std::string serialize_tags(size_t msg_items);
+
     public:
       rep_sink_impl(size_t itemsize, size_t vlen, char *address, int timeout);
       ~rep_sink_impl();

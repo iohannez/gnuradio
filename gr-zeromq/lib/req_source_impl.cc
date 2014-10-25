@@ -62,6 +62,27 @@ namespace gr {
       delete d_context;
     }
 
+    void
+    req_source_impl::deserialize_insert_tags(std::string tags_str)
+    {
+      const uint64_t nwritten = nitems_written(0);
+      pmt::pmt_t tags_list = pmt::deserialize_str(tags_str);
+      pmt::pmt_t tag_tuple;
+      uint64_t abs_offset;
+      pmt::pmt_t key;
+      pmt::pmt_t value;
+      pmt::pmt_t srcid;
+
+      for(size_t n = 0; n < pmt::length(tags_list); n++) {
+        tag_tuple = pmt::nth(n,tags_list);
+        abs_offset = pmt::to_uint64(pmt::tuple_ref(tag_tuple,0)) + nwritten;
+        key = pmt::tuple_ref(tag_tuple,1);
+        value = pmt::tuple_ref(tag_tuple,2);
+        srcid = pmt::tuple_ref(tag_tuple,3);
+        this->add_item_tag(0, abs_offset, key, value, srcid);
+      }
+    }
+
     int
     req_source_impl::work(int noutput_items,
                           gr_vector_const_void_star &input_items,
@@ -72,28 +93,37 @@ namespace gr {
       zmq::pollitem_t itemsout[] = { { *d_socket, 0, ZMQ_POLLOUT, 0 } };
       zmq::poll (&itemsout[0], 1, d_timeout);
 
-      //  If we got a reply, process
+      // If we got a message, process
       if (itemsout[0].revents & ZMQ_POLLOUT) {
-        // Request data, FIXME non portable?
-        zmq::message_t request(sizeof(int));
-        memcpy ((void *) request.data (), &noutput_items, sizeof(int));
+        // Request data
+        zmq::message_t request(sizeof(size_t));
+        memcpy ((void *) request.data (), &noutput_items, sizeof(size_t));
         d_socket->send(request);
       }
 
       zmq::pollitem_t itemsin[] = { { *d_socket, 0, ZMQ_POLLIN, 0 } };
       zmq::poll (&itemsin[0], 1, d_timeout);
 
-      //  If we got a reply, process
+      // If we got a reply, process
       if (itemsin[0].revents & ZMQ_POLLIN) {
         // Receive data
         zmq::message_t reply;
         d_socket->recv(&reply);
 
-        // Copy to ouput buffer and return
-        memcpy(out, (void *)reply.data(), reply.size());
-        return reply.size()/(d_itemsize*d_vlen);
+        // Copy out data and tags
+        size_t data_bytes;
+        size_t tags_bytes;
+        memcpy(&data_bytes, (char *)reply.data(),                                          sizeof(size_t));
+        memcpy(out,         (char *)reply.data()+sizeof(size_t),                           data_bytes);
+        memcpy(&tags_bytes, (char *)reply.data()+sizeof(size_t)+data_bytes,                sizeof(size_t));
+        // Get tags if present
+        if (tags_bytes > 0) {
+          std::string tags_str;
+          tags_str.append(  (char *)reply.data()+sizeof(size_t)+data_bytes+sizeof(size_t), tags_bytes);
+          deserialize_insert_tags(tags_str);
+        }
+        return data_bytes/(d_itemsize*d_vlen);
       }
-
       return 0;
     }
 

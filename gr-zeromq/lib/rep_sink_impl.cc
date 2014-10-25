@@ -62,6 +62,28 @@ namespace gr {
       delete d_context;
     }
 
+    std::string
+    rep_sink_impl::serialize_tags(size_t msg_items)
+    {
+      const uint64_t nread = this->nitems_read(0);
+      std::vector<tag_t> tags;
+      this->get_tags_in_range(tags, 0, nread, nread+msg_items);
+      if (tags.size() == 0) {
+        return std::string();
+      }
+      else {
+        pmt::pmt_t tag_list;
+        pmt::pmt_t tag_tuple;
+
+        for(std::vector<tag_t>::iterator tags_itr = tags.begin(); tags_itr != tags.end(); tags_itr++) {
+          uint64_t rel_offset = tags_itr->offset - nread;
+          tag_tuple = pmt::make_tuple(pmt::from_uint64(rel_offset), tags_itr->key, tags_itr->value, tags_itr->srcid);
+          pmt::list_add(tag_list,tag_tuple);
+        }
+        return pmt::serialize_str(tag_list);
+      }
+    }
+
     int
     rep_sink_impl::work(int noutput_items,
                         gr_vector_const_void_star &input_items,
@@ -72,30 +94,40 @@ namespace gr {
       zmq::pollitem_t items[] = { { *d_socket, 0, ZMQ_POLLIN, 0 } };
       zmq::poll (&items[0], 1, d_timeout);
 
-      //  If we got a reply, process
+      //  if we got a message, process
       if (items[0].revents & ZMQ_POLLIN) {
         // receive data request
         zmq::message_t request;
         d_socket->recv(&request);
         int req_output_items = *(static_cast<int*>(request.data()));
 
-        // create message copy and send
+        // reply
+        size_t msg_items = 0;
+        // determine number of items to put in message
         if (noutput_items < req_output_items) {
-          zmq::message_t msg(d_itemsize*d_vlen*noutput_items);
-          memcpy((void *)msg.data(), in, d_itemsize*d_vlen*noutput_items);
-          d_socket->send(msg);
-
-          return noutput_items;
+          msg_items = noutput_items;
         }
         else {
-          zmq::message_t msg(d_itemsize*d_vlen*req_output_items);
-          memcpy((void *)msg.data(), in, d_itemsize*d_vlen*req_output_items);
-          d_socket->send(msg);
-
-          return req_output_items;
+          msg_items = req_output_items;
         }
-      }
+        // get serialized tags
+        std::string tags_str = serialize_tags(msg_items);
+        // create message
+        size_t data_bytes = msg_items*d_itemsize*d_vlen;
+        size_t tags_bytes = tags_str.size();
+        size_t msg_size = sizeof(size_t) + data_bytes + sizeof(size_t) + tags_bytes;
+        zmq::message_t msg(msg_size);
+        memcpy(  (char *)msg.data(),                                          &data_bytes, sizeof(size_t));
+        memcpy(  (char *)msg.data()+sizeof(size_t),                           in,          data_bytes);
+        memcpy(  (char *)msg.data()+sizeof(size_t)+data_bytes,                &tags_bytes, sizeof(size_t));
+        if (tags_bytes > 0) {
+          memcpy((char *)msg.data()+sizeof(size_t)+data_bytes+sizeof(size_t), &tags_str,   tags_bytes);
+        }
+        // send message
+        d_socket->send(msg);
 
+        return msg_items;
+      }
       return 0;
     }
   } /* namespace zeromq */

@@ -38,6 +38,8 @@ namespace gr {
       zmq::context_t  *d_context;
       zmq::socket_t   *d_socket;
 
+      void deserialize_insert_tags(std::string tags_str);
+
     public:
       req_source_impl(size_t itemsize, size_t vlen, char *address, int timeout);
       ~req_source_impl();
